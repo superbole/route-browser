@@ -227,7 +227,9 @@ RIDES.forEach(r => { const e = r.lat.length - 1;
   r.homeLoop = !!HOME && dist(r.lat[0], r.lon[0], HOME[0], HOME[1]) < 400 && dist(r.lat[e], r.lon[e], HOME[0], HOME[1]) < 400; });
 
 RIDES.forEach(r => {
-  r.line = L.polyline(r.lat.map((la, k) => [la, r.lon[k]]), FAINT)
+  const segs = [[]];  // a watch left recording across a flight jumps continents: split there, no line across the map
+  r.lat.forEach((la, k) => { if (k && dist(r.lat[k - 1], r.lon[k - 1], la, r.lon[k]) > 20000) segs.push([]); segs[segs.length - 1].push([la, r.lon[k]]); });
+  r.line = L.polyline(segs, FAINT)
     .bindTooltip(`${r.n} · ${r.s.slice(0, 10)}`, {sticky: true})
     .bindPopup(`<b>${r.n}</b><br>${r.s.slice(0, 16)} · ${r.y.replace(/_/g, ' ')}<br>${r.km} km · ${fmtT(r.mv)} moving` +
                `${r.w ? ' · ' + Math.round(r.w) + ' W' : ''}${r.hr ? ' · ' + Math.round(r.hr) + ' bpm' : ''}` +
@@ -235,9 +237,13 @@ RIDES.forEach(r => {
     .on('mouseover', e => { if (r !== sel) e.target.setStyle(HOVER); })
     .on('mouseout', e => { if (r !== sel) e.target.setStyle(FAINT); });
 });
-// open on the rides that start within 30 km of home, so a holiday ride does not zoom out to the country
-const local = RIDES.filter(r => HOME && dist(r.lat[0], r.lon[0], HOME[0], HOME[1]) < 30000);
-if (RIDES.length) map.fitBounds(L.featureGroup((local.length ? local : RIDES).map(r => r.line)).getBounds());
+// open on the part of your rides within 30 km of home: points, not whole rides, because a few rides start at
+// home and end on another continent (the watch kept recording across a trip)
+const near = [];
+if (HOME) RIDES.forEach(r => { for (let k = 0; k < r.lat.length; k += 5)
+  if (dist(r.lat[k], r.lon[k], HOME[0], HOME[1]) < 30000) near.push([r.lat[k], r.lon[k]]); });
+if (near.length) map.fitBounds(L.latLngBounds(near));
+else if (RIDES.length) map.fitBounds(L.featureGroup(RIDES.map(r => r.line)).getBounds());
 else map.setView([0, 0], 2);
 
 // filters

@@ -66,7 +66,8 @@ Unregister-ScheduledTask -TaskName "Route browser refresh" -Confirm:$false
 
 - Hover a ride to see its name; click it for the details and a Garmin Connect link.
 - Elapsed includes stops; Moving, km/h, W and bpm leave out stops (gaps over 30 s).
-- The map opens on rides that start within 30 km of home, so a holiday ride does not zoom it out.
+- The map opens on the area within 30 km of home, so a holiday ride, or a watch left recording across a
+  flight, does not zoom it out.
   "Started and ended at home" uses your most common start point, worked out in the page each time.
 - Runs start unticked. Each section has a tick box beside its heading. Ticks and sliders are
   remembered in your browser.
