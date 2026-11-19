@@ -1,0 +1,5 @@
+requests
+fitdecode
+numpy
+scipy
+python-dotenv
