@@ -19,6 +19,7 @@ import math
 import sys
 import time
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import fitdecode
@@ -40,28 +41,53 @@ def haversine(lat1, lon1, lat2, lon2):
     return 12742000 * math.asin(math.sqrt(a))
 
 
-def parse_fit(raw):
-    """FIT bytes -> list of (lat, lon, t, d, alt, hr, pw), downsampled."""
+def thin(raw):
+    """(lat, lon, datetime, d, alt, hr, pw) records -> the cache's (lat, lon, t, d, alt, hr, pw), a point every MIN_STEP_M."""
     pts, t0, last = [], None, None
-    with fitdecode.FitReader(io.BytesIO(raw)) as fr:
-        for f in fr:
-            if not isinstance(f, fitdecode.FitDataMessage) or f.name != "record":
-                continue
-            v = {fld.name: fld.value for fld in f.fields}
-            la, lo, ts = v.get("position_lat"), v.get("position_long"), v.get("timestamp")
-            if la is None or lo is None or ts is None:
-                continue
-            la, lo = la * SEMI, lo * SEMI
-            if t0 is None:
-                t0 = ts
-            if last and haversine(last[0], last[1], la, lo) < MIN_STEP_M:
-                continue
-            alt = v.get("enhanced_altitude", v.get("altitude"))
-            last = (la, lo)
-            pts.append((round(la, 5), round(lo, 5), int((ts - t0).total_seconds()),
-                        None if v.get("distance") is None else round(v["distance"]),
-                        None if alt is None else round(alt, 1), v.get("heart_rate"), v.get("power")))
+    for la, lo, ts, d, alt, hr, pw in raw:
+        if la is None or lo is None or ts is None:
+            continue
+        t0 = t0 or ts
+        if last and haversine(last[0], last[1], la, lo) < MIN_STEP_M:
+            continue
+        last = (la, lo)
+        pts.append((round(la, 5), round(lo, 5), int((ts - t0).total_seconds()), None if d is None else round(d),
+                    None if alt is None else round(alt, 1), hr, pw))
     return pts
+
+
+def parse_fit(raw):
+    """FIT bytes -> cache points."""
+    def records():
+        with fitdecode.FitReader(io.BytesIO(raw)) as fr:
+            for f in fr:
+                if isinstance(f, fitdecode.FitDataMessage) and f.name == "record":
+                    v = {fld.name: fld.value for fld in f.fields}
+                    la, lo = v.get("position_lat"), v.get("position_long")
+                    yield (None if la is None else la * SEMI, None if lo is None else lo * SEMI, v.get("timestamp"),
+                           v.get("distance"), v.get("enhanced_altitude", v.get("altitude")), v.get("heart_rate"), v.get("power"))
+    return thin(records())
+
+
+def parse_tcx(raw):
+    """TCX bytes (older or uploaded activities) -> cache points."""
+    def val(el, name):  # first descendant with this local name, as float
+        for x in el.iter():
+            if x.tag.rsplit("}", 1)[-1] == name and x.text and x.text.strip():
+                return float(x.text)
+        return None
+
+    def records():
+        for tp in ET.fromstring(raw).iter():
+            if tp.tag.rsplit("}", 1)[-1] != "Trackpoint":
+                continue
+            ts = next((x.text for x in tp if x.tag.rsplit("}", 1)[-1] == "Time"), None)
+            hr, pw = val(tp, "Value"), val(tp, "Watts")
+            yield (val(tp, "LatitudeDegrees"), val(tp, "LongitudeDegrees"),
+                   dt.datetime.fromisoformat(ts.strip().replace("Z", "+00:00")) if ts else None,
+                   val(tp, "DistanceMeters"), val(tp, "AltitudeMeters"),
+                   None if hr is None else int(hr), None if pw is None else int(pw))
+    return thin(records())
 
 
 def main():
@@ -92,8 +118,12 @@ def main():
             z = g.get(f"/download-service/files/activity/{aid}",
                       accept="application/zip, application/x-zip-compressed, application/octet-stream")
             with zipfile.ZipFile(io.BytesIO(z)) as zf:
-                fit = next(n for n in zf.namelist() if n.lower().endswith(".fit"))
-                pts = parse_fit(zf.read(fit))
+                names = zf.namelist()
+                fit = next((n for n in names if n.lower().endswith(".fit")), None)
+                tcx = next((n for n in names if n.lower().endswith(".tcx")), None)
+                if not (fit or tcx):
+                    raise ValueError(f"no FIT or TCX file in the download: {names}")
+                pts = parse_fit(zf.read(fit)) if fit else parse_tcx(zf.read(tcx))
         except Exception as e:  # one bad file must not stop the pull; it is retried next run
             failed += 1
             print(f"  {aid}: skipped ({type(e).__name__}: {e})")
@@ -102,11 +132,12 @@ def main():
         meta = {k: a.get(k) for k in ("activityId", "activityName", "startTimeLocal", "distance",
                                        "movingDuration", "duration", "elevationGain", "averageHR")}
         meta["type"] = a["activityType"]["typeKey"]
+        meta["activityName"] = meta["activityName"] or meta["type"].replace("_", " ").capitalize()  # some have none
         meta["avgPower"] = a.get("avgPower")
         cols = list(zip(*pts)) if pts else [[]] * 7
         meta["track"] = dict(zip(("lat", "lon", "t", "d", "alt", "hr", "pw"), map(list, cols)))
         (CACHE / f"{aid}.json").write_text(json.dumps(meta, separators=(",", ":")))
-        print(f"  [{i}/{len(todo)}] {a['startTimeLocal'][:10]} {a['activityName'][:40]}: {len(pts)} pts")
+        print(f"  [{i}/{len(todo)}] {a['startTimeLocal'][:10]} {meta['activityName'][:40]}: {len(pts)} pts")
         time.sleep(PAUSE_S)
 
     print(f"done: {len(todo) - failed} cached ({no_gps} without GPS), {failed} failed, "
