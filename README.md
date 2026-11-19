@@ -83,7 +83,8 @@ most typical ride:
 - red = climbs of 25 m+ at 3%+ that take 1 to 15 min.
 - warm-up to the first stretch, and last stretch to the finish, in minutes.
 
-Click a stretch or climb to light it up in orange; its box hides or shows it. Routes that never go more
+Click a column heading to sort the table. Above it, pick loops only or one way only and a moving
+time range: loops, 50 to 70 min finds your 1-hour loops. Click a stretch or climb to light it up in orange; its box hides or shows it. Routes that never go more
 than 1 km from the start (trainer rides, circuits) are left out.
 
 ### Places you do repeats

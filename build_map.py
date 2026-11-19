@@ -135,7 +135,7 @@ h2 { font-size:15px; margin:14px 0 6px; }
 .mute { color:var(--mute); font-size:12px; }
 button { font:inherit; padding:3px 9px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; }
 button.on { border-color:var(--acc); color:var(--acc); }
-input[type=date] { font:inherit; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; }
+input[type=date], input[type=number], select { font:inherit; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; }
 table { width:100%; border-collapse:collapse; font-size:12.5px; }
 th { text-align:left; cursor:pointer; border-bottom:1px solid var(--line); padding:3px 4px; white-space:nowrap; user-select:none; }
 td { padding:3px 4px; border-bottom:1px solid var(--line); white-space:nowrap; }
@@ -160,6 +160,9 @@ td.n { max-width:120px; overflow:hidden; text-overflow:ellipsis; }
   <div class="row">on at least <input type="range" id="share" min="10" max="60" step="5" value="25"> <span id="sharev"></span> of the rides there</div>
   <div class="row">Shortest stretch <input type="range" id="minlen" min="4" max="20" step="1" value="8"> <span id="minv"></span></div>
   <div class="mute">Less strict: speed slider left (only real slowdowns count), rides slider right (only spots where you often slow count).</div>
+  <div class="row">Show <select id="rkind"><option value="">loops and one way</option><option value="loop">loops only</option>
+    <option value="one">one way only</option></select> moving <input type="number" id="rmin" min="0" step="5" placeholder="any" style="width:64px">
+    to <input type="number" id="rmax" min="0" step="5" placeholder="any" style="width:64px"> min</div>
   <table id="routes"></table>
   <div id="rdetail"></div></div>
   <h2><label><input type="checkbox" id="showplaces" checked> Places you do repeats</label></h2>
@@ -187,7 +190,7 @@ const RIDES = __RIDES__, ROUTES = __ROUTES__, PLACES = __PLACES__;
 __MATCHER__
 const $ = id => document.getElementById(id);
 // ticks and sliders are remembered in this browser (per viewer, never shared); the page works without it
-const KEEP = ['showroutes', 'showplaces', 'showspots', 'showab', 'home', 'either', 'slow', 'share', 'minlen', 'rad'];
+const KEEP = ['showroutes', 'showplaces', 'showspots', 'showab', 'home', 'either', 'slow', 'share', 'minlen', 'rad', 'rkind', 'rmin', 'rmax'];
 const kept = (() => { try { return JSON.parse(localStorage.getItem('route-browser-ui') || '{}'); } catch (e) { return {}; } })();
 KEEP.forEach(id => { if (id in kept) { const e = $(id); if (e.type === 'checkbox') e.checked = kept[id]; else e.value = kept[id]; } });
 function keep() {
@@ -256,14 +259,26 @@ function recompute() {
 }
 recompute();
 ['slow', 'share', 'minlen'].forEach(id => $(id).oninput = () => { recompute(); if (selRoute) pickRoute(selRoute, true); else { renderRoutes(); renderSpots(); } });
+// routes table: click a heading to sort; the kind and moving-time filters narrow it (e.g. a 1-hour loop: loops, 50 to 70)
+let rSort = 'n', rDir = -1;
+const RCOLS = [['name', 'Route', x => rname(x)], ['n', 'Rides', x => x.ids.length], ['km', 'km', x => x.km], ['mv', 'Moving', x => x.mv],
+               ['up', 'Climb', x => x.up], ['start', 'Usually', x => x.start], ['ns', 'Stretches', x => x.stretches.length]];
+['rkind', 'rmin', 'rmax'].forEach(id => $(id).oninput = () => { renderRoutes(); keep(); });
 function renderRoutes() {
   const on = $('showroutes').checked;
   $('routebox').style.display = on ? '' : 'none';
   if (!on) return;
-  $('routes').innerHTML = '<tr><th>Route</th><th>Rides</th><th>Moving</th><th>Climb</th><th>Usually</th><th>Stretches</th></tr>' +
-    ROUTES.map((x, k) => `<tr class="res${x === selRoute ? ' sel' : ''}" data-k="${k}"><td>${rname(x)}</td><td>${x.ids.length}</td>` +
-      `<td>${fmtT(x.mv)}</td><td>${x.up} m</td><td>${x.days.map(d => d[0]).join(' ')} ${x.start}</td>` +
+  const kind = $('rkind').value, lo = $('rmin').value, hi = $('rmax').value;
+  const rows = ROUTES.filter(x => (!kind || x.loop === (kind === 'loop')) && (lo === '' || x.mv >= lo * 60) && (hi === '' || x.mv <= hi * 60))
+    .sort((a, b) => { const x = RCOLS.find(c => c[0] === rSort)[2](a), y = RCOLS.find(c => c[0] === rSort)[2](b);
+      return (x < y ? -1 : x > y ? 1 : 0) * rDir; });
+  $('routes').innerHTML = '<tr>' + RCOLS.map(([k, l]) => `<th data-k="${k}">${l}${k === rSort ? (rDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('') + '</tr>' +
+    (rows.length ? '' : '<tr><td colspan="7" class="mute">No route matches. Widen the moving time or show both kinds.</td></tr>') +
+    rows.map(x => `<tr class="res${x === selRoute ? ' sel' : ''}" data-k="${ROUTES.indexOf(x)}"><td>${rname(x)}</td><td>${x.ids.length}</td>` +
+      `<td>${x.km}</td><td>${fmtT(x.mv)}</td><td>${x.up} m</td><td>${x.days.map(d => d[0]).join(' ')} ${x.start}</td>` +
       `<td>${x.stretches.length}${x.stretches.some(s => s.long) ? ' (' + x.stretches.filter(s => s.long).length + ' of 20 min+)' : ''}</td></tr>`).join('');
+  $('routes').querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.k; rDir = k === rSort ? -rDir : (k === 'name' || k === 'start' ? 1 : -1); rSort = k; renderRoutes(); });
   $('routes').querySelectorAll('tr.res').forEach(tr => tr.onclick = () => pickRoute(ROUTES[+tr.dataset.k]));
   const x = selRoute;
   const box = p => `<td><input type="checkbox" data-p="${parts.indexOf(p)}"${p.on ? ' checked' : ''} title="Show on the map"></td>`;
