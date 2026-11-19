@@ -127,8 +127,11 @@ in tools they run for their own use: share this folder, never someone's key.
 - `fetch.py` pulls the last 12 months by default; `--since` goes further. It only downloads activities
   it has not cached, and goes slowly on purpose (Garmin publishes no rate limits). Types: `cycling`,
   `road_biking`, `mountain_biking`, `gravel_cycling`, `cyclocross`, `bmx`, `running`, `trail_running`
-  (not indoor, treadmill or virtual).
+  (not indoor, treadmill or virtual). It reads FIT and TCX downloads; GPX not yet.
 - `loops.py` groups routes, records where rides slow down, and finds repeat places. `build_map.py`
   writes the page; the stretch finder and A-to-B matcher are its JavaScript.
 - `python build_map.py --self-test` checks all three on made-up tracks. It needs `node`, but no network
   and no key.
+- What changed is in [CHANGELOG.md](CHANGELOG.md), why it is built this way in
+  [docs/decisions.md](docs/decisions.md), and what is planned in [NEXT.md](NEXT.md) and
+  [BACKLOG.md](BACKLOG.md).
