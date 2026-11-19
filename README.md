@@ -47,10 +47,12 @@ rides and settings are not in this folder, so nothing is lost.
 paste this once into PowerShell in this folder:
 
 ```powershell
-$a = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PWD\refresh.ps1`""; $t = New-ScheduledTaskTrigger -Daily -At 21:00; $s = New-ScheduledTaskSettingsSet -StartWhenAvailable; Register-ScheduledTask -TaskName "Route browser refresh" -Action $a -Trigger $t -Settings $s
+$a = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PWD\refresh.ps1`""; $t = New-ScheduledTaskTrigger -Daily -At 21:00; $s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; Register-ScheduledTask -TaskName "Route browser refresh" -Action $a -Trigger $t -Settings $s
 ```
 
-If the computer is off or asleep at 21:00, it runs when it next wakes. The top of the page says when
+If the computer is off or asleep at 21:00, it runs when it next wakes, on battery too (Windows holds
+scheduled tasks on battery unless told otherwise). A key saved after you logged in is picked up
+without logging out. The top of the page says when
 it was last built and the date of your latest ride. If Garmin refuses the key, the page shows a red
 banner until a fetch works again. The last run's output is in `.route-browser\refresh.log`.
 
