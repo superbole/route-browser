@@ -3,5 +3,5 @@
 Set-Location $PSScriptRoot
 $log = Join-Path $HOME ".route-browser\refresh.log"
 New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
-python fetch.py *> $log
-python build_map.py *>> $log
+# through cmd, so the log is plain text and Python's error messages are not wrapped as PowerShell errors
+cmd /c "python fetch.py > ""$log"" 2>&1 & python build_map.py >> ""$log"" 2>&1"

@@ -10,7 +10,9 @@ The page embeds your tracks, so it stays on your computer: never publish or uplo
 The matcher lives in MATCHER_JS below; the self-test runs that same string under node.
 """
 import argparse
+import base64
 import datetime as dt
+import gzip
 import html
 import json
 import math
@@ -144,6 +146,7 @@ td.n { max-width:120px; overflow:hidden; text-overflow:ellipsis; }
 .leaflet-container { background:#ddd; }
 @media (max-width: 760px) { #wrap { flex-direction:column; } #map { flex:none; height:55vh; } #side { width:auto; border:0; } }
 </style></head><body>
+<div id="loading" style="position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);z-index:9999">Unpacking your rides…</div>
 <div id="wrap"><div id="map"></div><div id="side">
   __BANNER__<div class="mute">__UPDATED__</div>
   <div class="row"><span class="mute"><span id="count"></span>. With A to B ticked, click the map to drop A, then B; drag them to adjust.</span>
@@ -185,8 +188,14 @@ td.n { max-width:120px; overflow:hidden; text-overflow:ellipsis; }
   <div id="summary" class="mute"></div>
   <table id="res"></table></div>
 </div></div>
+<script>const DATA = "__DATA__";</script>
 <script>
-const RIDES = __RIDES__, ROUTES = __ROUTES__, PLACES = __PLACES__;
+(async () => {  // the data is gzipped JSON in base64, unpacked by the browser's own DecompressionStream (a quarter of the size)
+const raw = atob(DATA), bytes = new Uint8Array(raw.length);
+for (let k = 0; k < raw.length; k++) bytes[k] = raw.charCodeAt(k);
+const D = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).json();
+const RIDES = D.rides, ROUTES = D.routes, PLACES = D.places;
+document.getElementById('loading').remove();
 __MATCHER__
 const $ = id => document.getElementById(id);
 // ticks and sliders are remembered in this browser (per viewer, never shared); the page works without it
@@ -497,6 +506,7 @@ function select(x) {
   render();
 }
 update();
+})();
 </script></body></html>
 """
 
@@ -511,13 +521,12 @@ def build():
     updated = f"Updated {dt.datetime.now():%Y-%m-%d %H:%M}. Latest ride {latest}."
     banner = "" if st.get("ok", True) else (
         '<div style="background:#c92a2a;color:#fff;padding:6px 9px;border-radius:6px;margin-bottom:6px">'
-        f'The last Garmin fetch failed ({html.escape(st["when"])}): {html.escape(st["msg"])}. New rides are missing. '
+        f'The last Garmin fetch failed ({html.escape(st["when"])}): {html.escape(st["msg"].rstrip("."))}. New rides are missing. '
         'If the key was refused, make a new one (README: The Garmin key).</div>')
     page = (PAGE.replace("LEAFLET", LEAFLET).replace("__MATCHER__", MATCHER_JS)
             .replace("__BANNER__", banner).replace("__UPDATED__", updated)
-            .replace("__ROUTES__", json.dumps(rts, separators=(",", ":")))
-            .replace("__PLACES__", json.dumps(pls, separators=(",", ":")))
-            .replace("__RIDES__", json.dumps(rides, separators=(",", ":"))))
+            .replace("__DATA__", base64.b64encode(gzip.compress(json.dumps(
+                {"rides": rides, "routes": rts, "places": pls}, separators=(",", ":")).encode(), 9, mtime=0)).decode()))
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(page, encoding="utf-8")
     print(f"{len(rides)} rides ({len(recs) - len(rides)} without GPS skipped), {len(rts)} routes, {len(pls)} repeat places -> {OUT} "
