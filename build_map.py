@@ -116,6 +116,94 @@ function stretches(r, x, lvl, share, minS) {  // no-stop runs on route x's medoi
   out.warm = out.length ? out[0].at : null; out.home = last ? total - last.at - last.s : null;
   return out;
 }
+// route builder: your rides as a road graph. A node is a ~50 m cell AND a direction of travel (rides within 30 degrees of
+// each other share it); an edge joins two nodes a ride went between, costing your mean moving time over every ride that did.
+// So a leg can join pieces of different rides, but turns only where a ride turned: a bridge over a road you also rode, or
+// the other carriageway, shares the cell but not the direction, so it is never a junction.
+// ponytail: two roads side by side in one cell going the same way (a slip road) still join; finer cells if that bites
+const ckey = (a, b) => (a + 4e5) * 2e6 + b + 8e5;  // cell indexes at 1/2000 degree, packed into one number
+const turn = (a, b) => Math.abs(((a - b) % 360 + 540) % 360 - 180);  // degrees between two headings
+function heads(r) {  // direction of travel at each point, from about 20 m back to 20 m ahead
+  const n = r.lat.length, h = new Float64Array(n);
+  for (let k = 0, i = 0, j = 0; k < n; k++) {
+    while (r.dd[k] - r.dd[i + 1] >= 20) i++;
+    j = Math.max(j, k); while (j < n - 1 && r.dd[j] - r.dd[k] < 20) j++;
+    h[k] = Math.atan2((r.lon[j] - r.lon[i]) * Math.cos(r.lat[k] * Math.PI / 180), r.lat[j] - r.lat[i]) * 180 / Math.PI;
+  }
+  return h;
+}
+const flip = r => { const T = r.tt[r.tt.length - 1], D = r.dd[r.dd.length - 1];  // the same ride, ridden backwards
+  return {lat: [...r.lat].reverse(), lon: [...r.lon].reverse(), tt: r.tt.map(t => T - t).reverse(), dd: r.dd.map(d => D - d).reverse()}; };
+function graph(rides, either) {
+  const id = new Map(), la = [], lo = [], hd = [], cnt = [], adj = [];
+  const add = (u, v, s, m) => { const e = adj[u].get(v); if (e) { e[0] += s; e[1]++; } else adj[u].set(v, [s, 1, m]); };
+  const node = (key, h) => { let c = id.get(key); if (!c) id.set(key, c = []);
+    for (const u of c) if (turn(hd[u], h) <= 30) return u;
+    const u = la.length; c.push(u); la.push(0); lo.push(0); hd.push(h); cnt.push(0); adj.push(new Map()); return u; };
+  for (const r of either ? rides.flatMap(r => [r, flip(r)]) : rides) {
+    const h = heads(r);
+    let prev = -1, pk = -1, u = -1, s0 = 0, m0 = 0, mv = 0;
+    for (let k = 0; k < r.lat.length; k++) {
+      if (k) { const dt = r.tt[k] - r.tt[k - 1]; if (dt <= 30) mv += dt;  // moving time: gaps over 30 s are stops
+        if (dist(r.lat[k - 1], r.lon[k - 1], r.lat[k], r.lon[k]) > 500) prev = pk = -1; }  // a GPS jump: no edge across it
+      const key = ckey(Math.round(r.lat[k] * 2000), Math.round(r.lon[k] * 2000));
+      if (key !== pk) {  // entered a new cell: the edge costs the time and distance since entering the last one
+        u = node(key, h[k]); pk = key;
+        if (prev >= 0 && prev !== u) add(prev, u, mv - s0, r.dd[k] - m0);
+        prev = u; s0 = mv; m0 = r.dd[k];
+      }
+      la[u] += r.lat[k]; lo[u] += r.lon[k]; cnt[u]++;
+    }
+  }
+  for (let u = 0; u < la.length; u++) { la[u] /= cnt[u]; lo[u] /= cnt[u]; }
+  return {id, la, lo, adj};
+}
+function snap(G, P, rad) {  // the nodes within 25 m of the nearest one to P (any direction), nearest first; [] if none within rad
+  const a = Math.round(P[0] * 2000), b = Math.round(P[1] * 2000);
+  const wa = Math.ceil(rad / 55), wb = Math.ceil(rad / (55 * Math.cos(P[0] * Math.PI / 180))), near = [];
+  for (let i = a - wa; i <= a + wa; i++) for (let j = b - wb; j <= b + wb; j++)
+    for (const u of G.id.get(ckey(i, j)) || []) { const d = dist(P[0], P[1], G.la[u], G.lo[u]); if (d <= rad) near.push([d, u]); }
+  near.sort((x, y) => x[0] - y[0]);
+  return near.filter(x => x[0] <= near[0][0] + 25).map(x => x[1]);
+}
+function fastest(G, S, T, pen) {  // Dijkstra on mean moving time from any of S to any of T; pen makes used edges dearer
+  const n = G.la.length, d = new Float64Array(n).fill(Infinity), from = new Int32Array(n).fill(-1), h = [], goal = new Set(T);
+  const swap = (i, j) => { const x = h[i]; h[i] = h[j]; h[j] = x; };
+  const push = (c, u) => { h.push([c, u]);
+    for (let i = h.length - 1; i;) { const p = (i - 1) >> 1; if (h[p][0] <= h[i][0]) break; swap(p, i); i = p; } };
+  const pop = () => { const top = h[0], last = h.pop();
+    if (h.length) { h[0] = last;
+      for (let i = 0;;) { const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < h.length && h[l][0] < h[m][0]) m = l; if (r < h.length && h[r][0] < h[m][0]) m = r;
+        if (m === i) break; swap(m, i); i = m; } }
+    return top; };
+  for (const s of S) { d[s] = 0; push(0, s); }
+  let t = -1;
+  while (h.length) {
+    const [c, u] = pop();
+    if (c > d[u]) continue;
+    if (goal.has(u)) { t = u; break; }
+    for (const [v, e] of G.adj[u]) { const w = c + e[0] / e[1] * (pen.get(u * n + v) || 1);
+      if (w < d[v]) { d[v] = w; from[v] = u; push(w, v); } }
+  }
+  if (t < 0) return null;
+  const p = [t]; while (from[p[p.length - 1]] >= 0) p.push(from[p[p.length - 1]]);
+  return p.reverse();
+}
+function ways(G, S, T, n) {  // the fastest way, then up to n-1 others: re-run with used edges 1.5x dearer, keep what differs
+  const N = G.la.length, pen = new Map(), out = [];
+  for (let k = 0; k < 2 * n && out.length < n; k++) {
+    const p = fastest(G, S, T, pen);
+    if (!p) break;
+    let mov = 0, m = 0;
+    for (let i = 1; i < p.length; i++) { const e = G.adj[p[i - 1]].get(p[i]), key = p[i - 1] * N + p[i];
+      mov += e[0] / e[1]; m += e[2]; pen.set(key, (pen.get(key) || 1) * 1.5); }
+    if (out.length && mov > 1.5 * out[0].mov) continue;  // ponytail: half as slow again is a detour, not a choice
+    if (out.every(o => { let c = 0; p.forEach(u => c += o.set.has(u)); return c / p.length < .7; }))
+      out.push({mov, m, set: new Set(p), ll: p.map(u => [G.la[u], G.lo[u]])});
+  }
+  return out;
+}
 """
 
 PAGE = """<!doctype html>
@@ -132,7 +220,10 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:
 #wrap { display:flex; height:100%; }
 #map { flex:1; }
 #side { width:500px; overflow:auto; padding:12px 16px; border-left:1px solid var(--line); }
-h2 { font-size:15px; margin:14px 0 6px; }
+h2 { font-size:15px; margin:14px 0 6px; } h3 { font-size:13px; margin:12px 0 4px; }
+#tabs { display:flex; flex-wrap:wrap; gap:4px; margin:16px 0 8px; border-bottom:1px solid var(--line); }
+#tabs button { border-bottom:0; border-radius:6px 6px 0 0; margin-bottom:-1px; }
+#tabs button.on { border-color:var(--acc); border-bottom:1px solid var(--bg); font-weight:600; }
 .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:4px 0; }
 .mute { color:var(--mute); font-size:12px; }
 button { font:inherit; padding:3px 9px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; }
@@ -149,13 +240,13 @@ td.n { max-width:120px; overflow:hidden; text-overflow:ellipsis; }
 <div id="loading" style="position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);z-index:9999">Unpacking your rides…</div>
 <div id="wrap"><div id="map"></div><div id="side">
   __BANNER__<div class="mute">__UPDATED__</div>
-  <div class="row"><span class="mute"><span id="count"></span>. With A to B ticked, click the map to drop A, then B; drag them to adjust.</span>
-    <button id="zoom">Zoom to shown rides</button></div>
+  <div class="row"><span class="mute" id="count"></span> <button id="zoom">Zoom to shown rides</button></div>
   <h2>Filters</h2>
   <div class="row">From <input type="date" id="from"> to <input type="date" id="to"></div>
   <div class="row" id="types"></div>
   <div class="row"><label><input type="checkbox" id="home"> Only rides that started and ended at home</label></div>
-  <h2><label><input type="checkbox" id="showroutes" checked> Routes you repeat</label></h2>
+  <div id="tabs"><button data-t="routes">Routes you repeat</button><button data-t="places">Repeat places</button>
+    <button data-t="spots">New spots</button><button data-t="ab">A to B</button><button data-t="build">Route builder</button></div>
   <div id="routebox"><div class="mute">Rides grouped by route (same start, same finish, mostly the same roads). Click one to see it alone:
     <span style="color:#2f9e44">green</span> (two shades, so neighbours stand apart) = stretches with no stops at your usual pace;
     <span style="color:#e03131">red</span> = climbs that suit repeats. ★ = 20 min+, long enough for a 20-min rep.</div>
@@ -168,25 +259,29 @@ td.n { max-width:120px; overflow:hidden; text-overflow:ellipsis; }
     to <input type="number" id="rmax" min="0" step="5" placeholder="any" style="width:64px"> min</div>
   <table id="routes"></table>
   <div id="rdetail"></div></div>
-  <h2><label><input type="checkbox" id="showplaces" checked> Places you do repeats</label></h2>
   <div id="placebox"><div class="mute">Roads where a ride with power had 3+ hard efforts on the same stretch (or 2 of 5 min+),
     in 2+ rides. Click one to see its sessions; reps are <span style="color:#ae3ec9">magenta</span> one way and
     <span style="color:#1098ad">teal</span> the other.</div>
   <table id="places"></table>
   <div id="pdetail"></div></div>
-  <h2><label><input type="checkbox" id="showspots" checked> Possible new spots</label></h2>
   <div id="spotbox"><div class="mute">No-stop stretches and climbs on routes you ride that you have not used for repeats yet,
-    longest first. The route sliders above set what counts. "Both ways" = also stop-free heading the other way on one of your routes.
+    longest first. The sliders on the Routes tab set what counts. "Both ways" = also stop-free heading the other way on one of your routes.
     Click one to see it in orange.</div>
   <table id="spots"></table></div>
-  <h2><label><input type="checkbox" id="showab" checked> A to B</label></h2>
-  <div id="abbox"><div class="row">
+  <div id="abbox"><div class="mute">Click the map to drop A, then B; drag them to adjust. Lists every ride that passed A, then B.</div><div class="row">
     <button id="setA">Move A</button><button id="setB">Move B</button><button id="clear">Clear</button>
     <label><input type="checkbox" id="either"> Either direction</label>
   </div>
   <div class="row">Radius <input type="range" id="rad" min="30" max="500" step="10" value="100"> <span id="radv">100 m</span></div>
   <div id="summary" class="mute"></div>
   <table id="res"></table></div>
+  <div id="buildbox"><div class="mute">Click the map to drop point 1, then 2, 3 and so on; each snaps to the nearest road you have
+    ridden, and you can drag it. Each leg takes the fastest way along roads you have ridden, joining pieces of different rides, timed
+    at your average moving time on each piece; up to two other ways are listed if they are not much slower. Click a way to use it;
+    hover to see it in orange.</div>
+  <div class="row"><button id="bundo">Remove last point</button><button id="bclear">Clear</button>
+    <label title="A road you have ridden only one way counts for the other way too, at the same time"><input type="checkbox" id="beither"> Use roads both ways</label></div>
+  <div id="btotal"></div><div id="blegs"></div></div>
 </div></div>
 <script>const DATA = "__DATA__";</script>
 <script>
@@ -199,19 +294,22 @@ document.getElementById('loading').remove();
 __MATCHER__
 const $ = id => document.getElementById(id);
 // ticks and sliders are remembered in this browser (per viewer, never shared); the page works without it
-const KEEP = ['showroutes', 'showplaces', 'showspots', 'showab', 'home', 'either', 'slow', 'share', 'minlen', 'rad', 'rkind', 'rmin', 'rmax'];
+const KEEP = ['home', 'either', 'slow', 'share', 'minlen', 'rad', 'rkind', 'rmin', 'rmax', 'beither'];
 const kept = (() => { try { return JSON.parse(localStorage.getItem('route-browser-ui') || '{}'); } catch (e) { return {}; } })();
+const BOX = {routes: 'routebox', places: 'placebox', spots: 'spotbox', ab: 'abbox', build: 'buildbox'};
+let tab = BOX[kept.tab] ? kept.tab : 'routes';
 KEEP.forEach(id => { if (id in kept) { const e = $(id); if (e.type === 'checkbox') e.checked = kept[id]; else e.value = kept[id]; } });
 function keep() {
   const o = Object.fromEntries(KEEP.map(id => { const e = $(id); return [id, e.type === 'checkbox' ? e.checked : e.value]; }));
-  o.types = [...$('types').querySelectorAll('input')].filter(i => i.checked).map(i => i.value);
+  o.types = [...$('types').querySelectorAll('input')].filter(i => i.checked).map(i => i.value); o.tab = tab;
   try { localStorage.setItem('route-browser-ui', JSON.stringify(o)); } catch (e) {}
 }
 document.addEventListener('change', keep);
 RIDES.forEach(decode);
 const map = L.map('map', {preferCanvas: true});
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  {maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
+// Esri: a double-clicked routes.html sends no Referer, and OSM's own tiles then get blocked; CARTO wants a key
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+  {maxZoom: 19, attribution: 'Tiles &copy; Esri, HERE, Garmin, &copy; OpenStreetMap contributors'}).addTo(map);
 const fmtT = s => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
   return h ? `${h}:${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}` : `${m}:${String(x).padStart(2,'0')}`; };
 const link = r => `https://connect.garmin.com/modern/activity/${r.id}`;
@@ -234,6 +332,7 @@ RIDES.forEach(r => {
     .bindPopup(`<b>${r.n}</b><br>${r.s.slice(0, 16)} · ${r.y.replace(/_/g, ' ')}<br>${r.km} km · ${fmtT(r.mv)} moving` +
                `${r.w ? ' · ' + Math.round(r.w) + ' W' : ''}${r.hr ? ' · ' + Math.round(r.hr) + ' bpm' : ''}` +
                `<br><a href="${link(r)}" target="_blank" rel="noopener">Open in Garmin Connect</a>`)
+    .on('click', e => { if (drop(e.latlng)) map.closePopup(); })  // the popup swallows the click, so the map never sees it
     .on('mouseover', e => { if (r !== sel) e.target.setStyle(HOVER); })
     .on('mouseout', e => { if (r !== sel) e.target.setStyle(FAINT); });
 });
@@ -280,9 +379,7 @@ const RCOLS = [['name', 'Route', x => rname(x)], ['n', 'Rides', x => x.ids.lengt
                ['up', 'Climb', x => x.up], ['start', 'Usually', x => x.start], ['ns', 'Stretches', x => x.stretches.length]];
 ['rkind', 'rmin', 'rmax'].forEach(id => $(id).oninput = () => { renderRoutes(); keep(); });
 function renderRoutes() {
-  const on = $('showroutes').checked;
-  $('routebox').style.display = on ? '' : 'none';
-  if (!on) return;
+  if (tab !== 'routes') return;
   const kind = $('rkind').value, lo = $('rmin').value, hi = $('rmax').value;
   const rows = ROUTES.filter(x => (!kind || x.loop === (kind === 'loop')) && (lo === '' || x.mv >= lo * 60) && (hi === '' || x.mv <= hi * 60))
     .sort((a, b) => { const x = RCOLS.find(c => c[0] === rSort)[2](a), y = RCOLS.find(c => c[0] === rSort)[2](b);
@@ -346,15 +443,12 @@ function pickRoute(x, keepView) {
   }
   update();
 }
-$('showroutes').onchange = () => { if (!$('showroutes').checked && selRoute) pickRoute(null); else renderRoutes(); };
 
 // places you do repeats (loops.places): click one for its sessions, a session to draw its reps
 let selPlace = null, selSess = null, placeLayer = null;
 const REPCOL = ['#ae3ec9', '#1098ad'];
 function renderPlaces() {
-  const on = $('showplaces').checked;
-  $('placebox').style.display = on ? '' : 'none';
-  if (!on) return;
+  if (tab !== 'places') return;
   $('places').innerHTML = !PLACES.length ? '<tr><td class="mute">None found yet: it needs rides with power.</td></tr>' :
     '<tr><th>Place</th><th>Times</th><th>Usually</th><th>Both ways</th><th>Last</th></tr>' +
     PLACES.map((p, k) => `<tr class="res${p === selPlace ? ' sel' : ''}" data-k="${k}"><td>${p.name}</td><td>${p.sess.length}</td>` +
@@ -388,7 +482,6 @@ function pickPlace(p) {
   update();
   if (p) drawSess(p.sess[0]);
 }
-$('showplaces').onchange = () => { if (!$('showplaces').checked && selPlace) pickPlace(null); else renderPlaces(); };
 
 // possible new spots: route stretches and climbs that no repeat place covers (~50 m cells, as in loops.py)
 const ck = (la, lo) => Math.round(la * 2000) + ',' + Math.round(lo * 2000);
@@ -414,9 +507,7 @@ function findSpots() {
   if (selSpot && !SPOTS.includes(selSpot)) pickSpot(null);
 }
 function renderSpots() {
-  const on = $('showspots').checked;
-  $('spotbox').style.display = on ? '' : 'none';
-  if (!on) return;
+  if (tab !== 'spots') return;
   findSpots();
   $('spots').innerHTML = !SPOTS.length ? '<tr><td class="mute">None at these settings.</td></tr>' :
     '<tr><th>On</th><th>Starts</th><th>Kind</th><th>Lasts</th><th>km</th><th>Grad.</th><th>Both ways</th></tr>' +
@@ -434,7 +525,6 @@ function pickSpot(c) {
   }
   renderSpots();
 }
-$('showspots').onchange = () => { if (!$('showspots').checked && selSpot) pickSpot(selSpot); else renderSpots(); };
 
 // A-to-B
 let A = null, B = null, active = null, sel = null, segLine = null, results = [], shown = [], sortKey = 's', sortDir = -1;
@@ -449,22 +539,77 @@ function place(which, ll) {
   if (which === 'A') A = [ll.lat, ll.lng]; else B = [ll.lat, ll.lng];
 }
 ['A', 'B'].forEach(w => pt[w].m.on('drag', e => { pt[w].c.setLatLng(e.latlng); }).on('dragend', e => { place(w, e.target.getLatLng()); update(); }));
-map.on('click', e => {
-  if (!$('showab').checked) return;
+function drop(ll) {  // a click on the map or a ride, in the A to B or builder tab, drops a point; true when it did
+  if (tab === 'build') { addPt(ll); return true; }
+  if (tab !== 'ab') return false;
   const w = active || (!A ? 'A' : !B ? 'B' : null);
-  if (!w) return;
-  place(w, e.latlng); active = null; $('setA').className = $('setB').className = ''; update();
-});
+  if (!w) return false;
+  place(w, ll); active = null; $('setA').className = $('setB').className = ''; update();
+  return true;
+}
+map.on('click', e => drop(e.latlng));
 ['A', 'B'].forEach(w => $('set' + w).onclick = () => { active = active === w ? null : w;
   $('setA').className = active === 'A' ? 'on' : ''; $('setB').className = active === 'B' ? 'on' : ''; });
 $('clear').onclick = () => { A = B = null; ['A', 'B'].forEach(w => { pt[w].m.remove(); pt[w].c.remove(); }); update(); };
-function showAB() { $('abbox').style.display = $('showab').checked ? '' : 'none'; }
-$('showab').onchange = () => { if (!$('showab').checked && (A || B)) $('clear').onclick(); showAB(); };
-showAB();
 $('rad').oninput = () => { $('radv').textContent = $('rad').value + ' m'; pt.A.c.setRadius(+$('rad').value); pt.B.c.setRadius(+$('rad').value); };
 $('rad').onchange = update;
-['from', 'to', 'home', 'either'].forEach(id => $(id).onchange = update);
-$('types').onchange = update;
+$('either').onchange = update;
+['from', 'to', 'home'].forEach(id => $(id).onchange = refilter);
+$('types').onchange = refilter;
+function refilter() { update(); if (pts.length) calcAll(); else G = null; }  // the builder's roads come from the filtered rides
+
+// route builder: click points in order; each leg is routed over the road graph of the shown rides (graph() above)
+let pts = [], legs = [], G = null, peek = null;
+const bLayer = L.featureGroup().addTo(map), LEGCOL = ['#1c7ed6', '#f76707'], SNAP = 300;
+const graphNow = () => G || (G = graph(visible(), $('beither').checked));  // built on first use, again after a filter change
+const snapPt = ll => { const u = snap(graphNow(), ll, SNAP); return {u, ll: u.length ? [G.la[u[0]], G.lo[u[0]]] : ll}; };
+const calcLeg = k => { const s = pts[k].u, t = pts[k + 1].u; legs[k] = {opts: s.length && t.length ? ways(G, s, t, 3) : [], pick: 0}; };
+function calcAll() { G = null; pts = pts.map(p => snapPt(p.ll)); legs = []; for (let k = 0; k + 1 < pts.length; k++) calcLeg(k); renderBuild(); }
+function addPt(ll) { pts.push(snapPt([ll.lat, ll.lng])); if (pts.length > 1) calcLeg(pts.length - 2); renderBuild(); }
+$('bundo').onclick = () => { pts.pop(); legs.length = Math.max(0, pts.length - 1); renderBuild(); };
+$('bclear').onclick = () => { pts = []; legs = []; renderBuild(); };
+$('beither').onchange = calcAll;
+const km = m => (m / 1000).toFixed(1);
+function renderBuild() {
+  if (peek) { peek.remove(); peek = null; }
+  bLayer.clearLayers();
+  pts.forEach((p, k) => bLayer.addLayer(mk(String(k + 1), !p.u.length ? '#c92a2a' : '#495057').setLatLng(p.ll).on('dragend', e => {
+    const ll = e.target.getLatLng(); pts[k] = snapPt([ll.lat, ll.lng]);
+    if (k) calcLeg(k - 1); if (k + 1 < pts.length) calcLeg(k); renderBuild(); })));
+  legs.forEach((g, k) => { const o = g.opts[g.pick];
+    if (o) bLayer.addLayer(L.polyline(o.ll, {color: LEGCOL[k % 2], weight: 6, opacity: .9})
+      .bindTooltip(`${k + 1} to ${k + 2}: ${km(o.m)} km, ${fmtT(o.mov)} moving`, {sticky: true})); });
+  const ok = legs.filter(g => g.opts.length), sum = f => ok.reduce((s, g) => s + f(g.opts[g.pick]), 0), miss = legs.length - ok.length;
+  $('btotal').innerHTML = !legs.length ? (pts.length ? '<p class="mute">Now drop point 2.</p>' : '') :
+    `<p><b>${km(sum(o => o.m))} km, ${fmtT(sum(o => o.mov))} moving</b>` +
+    (miss ? ` <span style="color:#c92a2a">(${miss} leg${miss > 1 ? 's' : ''} with no way left out)</span>` : '') + '</p>';
+  $('blegs').innerHTML = legs.map((g, k) => `<h3>${k + 1} to ${k + 2}</h3>` + (g.opts.length
+    ? '<table><tr><th>Way</th><th>km</th><th>Moving</th><th>Slower by</th></tr>' +
+      g.opts.map((o, w) => `<tr class="res${w === g.pick ? ' sel' : ''}" data-k="${k}" data-w="${w}"><td>${w + 1}</td><td>${km(o.m)}</td>` +
+        `<td>${fmtT(o.mov)}</td><td>${w ? fmtT(o.mov - g.opts[0].mov) : 'fastest'}</td></tr>`).join('') + '</table>'
+    : `<p class="mute">${[k, k + 1].filter(i => !pts[i].u.length).map(i => `Point ${i + 1} (red) is not within ${SNAP} m of a road you have ridden. `).join('') ||
+      `No way from ${k + 1} to ${k + 2} along roads you have ridden, turning only where a ride turned${$('beither').checked ? '' :
+        ' and going the way you rode them (tick Use roads both ways)'}. `}` +
+      'Move a point, or check the filters.</p>')).join('');
+  $('blegs').querySelectorAll('tr.res').forEach(tr => { const g = legs[+tr.dataset.k], w = +tr.dataset.w, o = g.opts[w];
+    tr.onclick = () => { g.pick = w; renderBuild(); };
+    tr.onmouseenter = () => { peek = L.polyline(o.ll, {color: HOT, weight: 9, opacity: 1}).addTo(map); };
+    tr.onmouseleave = () => { if (peek) { peek.remove(); peek = null; } }; });
+}
+
+// tabs: leaving one puts the map back to all rides (the builder keeps its route: it narrows nothing)
+function setTab(t) {
+  if (tab === 'routes' && selRoute) pickRoute(null);
+  if (tab === 'places' && selPlace) pickPlace(null);
+  if (tab === 'spots' && selSpot) pickSpot(selSpot);
+  if (tab === 'ab' && (A || B)) $('clear').onclick();
+  tab = t; keep();
+  Object.entries(BOX).forEach(([k, id]) => $(id).style.display = k === t ? '' : 'none');
+  $('tabs').querySelectorAll('button').forEach(b => b.className = b.dataset.t === t ? 'on' : '');
+  renderRoutes(); renderPlaces(); renderSpots();
+}
+$('tabs').querySelectorAll('button').forEach(b => b.onclick = () => setTab(b.dataset.t));
+setTab(tab);
 
 const COLS = [['s', 'Date'], ['n', 'Ride'], ['el', 'Elapsed'], ['mov', 'Moving'], ['m', 'km'], ['kmh', 'km/h'], ['w', 'W'], ['hr', 'bpm']];
 function update() {
@@ -485,6 +630,7 @@ function update() {
   $('count').textContent = `${vis.length} of ${RIDES.length} rides shown`;
   if (sel && !results.some(x => x.r === sel)) select(null);
   if (routeLayer) routeLayer.bringToFront();
+  bLayer.bringToFront();
   render(); renderRoutes(); renderPlaces(); renderSpots();
 }
 function render() {
@@ -541,15 +687,25 @@ def build():
 
 def self_test():
     """Synthetic tracks along a meridian: A at 0.000 lat, B at 0.010 (about 1.1 km apart)."""
-    def ride(rid, lats, lon=0.0):
+    def ride(rid, lats, lon=0.0, step=10):
         n = len(lats)
         return encode({"activityId": rid, "activityName": rid, "startTimeLocal": "2026-01-01 08:00:00",
-                       "type": "cycling", "distance": None, "movingDuration": n * 10, "duration": None,
-                       "track": {"lat": lats, "lon": [lon] * n, "t": [k * 10 for k in range(n)],
+                       "type": "cycling", "distance": None, "movingDuration": n * step, "duration": None,
+                       "track": {"lat": lats, "lon": lon if isinstance(lon, list) else [lon] * n, "t": [k * step for k in range(n)],
                                  "d": [None] * n, "alt": [None] * n, "hr": [140] * n, "pw": [200] * n}})
     up = [k / 1000 for k in range(-3, 14)]           # passes A then B
     fixture = [ride("ab", up), ride("ba", up[::-1]), ride("miss", up, lon=0.01),  # 'miss' runs ~1.1 km east
                ride("loop", up + up[::-1] + up)]                                  # A, B, A, B: shortest A->B wins
+    # route builder: no single ride goes from (0, 0) to (0.01, 0.01). 'n' goes north and 'e' east (10 s a point), straight
+    # across each other at (0.01, 0); 't' turned there from n onto e. 'slow' goes east, then north (14 s a point); 'far' goes
+    # 5 km round (over 1.5x as slow: a detour, not listed). 'up' and 'down' are the two carriageways of a road 49 m apart.
+    k11, k13 = [k / 1000 for k in range(11)], [k / 1000 for k in range(-2, 11)]
+    roads = [ride("n", [k / 1000 for k in range(13)]), ride("e", [0.01] * 13, k13),
+             ride("t", [0.008, 0.009, 0.01, 0.01, 0.01], [0, 0, 0, 0.001, 0.002]),
+             ride("up", k11, 0.02978), ride("down", k11[::-1], 0.03022),
+             ride("slow", [0.0] * 11 + k11[1:], k11 + [0.01] * 10, 14),
+             ride("far", [-k / 1000 for k in range(11)] + [-0.01] * 20 + [-0.01 + k / 1000 for k in range(1, 21)] + [0.01] * 10,
+                  [0.0] * 11 + [k / 1000 for k in range(1, 21)] + [0.02] * 20 + [0.02 - k / 1000 for k in range(1, 11)])]
     js = MATCHER_JS + """
 const R = %s.map(decode), A = [0, 0], B = [0.01, 0], by = id => R.find(r => r.id === id);
 const assert = (c, m) => { if (!c) { console.error('FAIL: ' + m); process.exit(1); } };
@@ -565,7 +721,21 @@ const lp = matchAB(by('loop'), A, B, 100, false);
 assert(lp && lp.i === 3 && lp.j === 13, 'first A->B pass on a repeated loop ' + JSON.stringify(lp));
 assert(matchAB(by('miss'), A, B, 1200, false) !== null, 'radius is honoured');
 console.log('matcher OK: 7 assertions');
-""" % json.dumps(fixture)
+const RD = %s.map(decode), G = graph(RD, false), P1 = snap(G, [0.0002, 0.0001], 300), P2 = snap(G, [0.01, 0.0098], 300);
+assert(snap(G, [0.005, 0.005], 300).length === 0, 'nothing ridden within 300 m of the middle');
+const W = ways(G, P1, P2, 3), sum = W.map(w => [w.mov, Math.round(w.m)]);
+assert(W.length === 2 && W[0].mov === 200 && Math.abs(W[0].m - 2220) < 20 && W[0].ll[11][0] > 0.0099 && W[1].mov === 280,
+       'north then east (three rides joined), then east then north; the 5 km detour is left out ' + JSON.stringify(sum));
+assert(ways(G, P2, P1, 3).length === 0, 'roads ridden one way are not routed the other way');
+const GE = graph(RD, true);
+assert(ways(GE, snap(GE, [0.01, 0.0098], 300), snap(GE, [0.0002, 0.0001], 300), 3)[0].mov === 200, 'unless roads count both ways');
+const GB = graph(RD.filter(r => r.id !== 't'), false), WB = ways(GB, snap(GB, [0.0002, 0.0001], 300), snap(GB, [0.01, 0.0098], 300), 3);
+assert(WB.length === 1 && WB[0].mov === 280, 'a crossing nobody turned at is a bridge, not a junction ' + JSON.stringify(WB.map(w => w.mov)));
+const UP = snap(G, [0.001, 0.02978], 300);
+assert(ways(G, UP, snap(G, [0.005, 0.03022], 300), 3).length === 0, 'no U-turn onto the other carriageway');
+assert(ways(G, UP, snap(G, [0.005, 0.02978], 300), 3)[0].mov === 40, 'but on along the same one');
+console.log('route builder OK: 7 assertions');
+""" % (json.dumps(fixture), json.dumps(roads))
     # the route library: two rides of one road with a stop at the same place both times, plus another road
     def rec(rid, lon, stop_at=None):
         lat, t, now = [k * 0.0002 for k in range(500)], [], 0  # 11 km north at 20 km/h

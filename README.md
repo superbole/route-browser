@@ -1,9 +1,10 @@
 # Route browser
 
 Your outdoor rides and runs on one map: the routes you repeat with their no-stop stretches and climbs,
-the places you do repeats, possible new spots for them, and every ride that passed point A then point
-B. It runs on your own computer with your own Garmin key (Garmin's free Personal API), and nothing
-leaves it except the calls to Garmin and the map (its library and tiles).
+the places you do repeats, possible new spots for them, every ride that passed point A then point
+B, and a route builder that plans a ride along roads you have ridden. It runs on your own computer
+with your own Garmin key (Garmin's free Personal API), and nothing leaves it except the calls to Garmin
+and the map (its library and tiles).
 
 ## Set it up (once)
 
@@ -69,8 +70,9 @@ Unregister-ScheduledTask -TaskName "Route browser refresh" -Confirm:$false
 - The map opens on the area within 30 km of home, so a holiday ride, or a watch left recording across a
   flight, does not zoom it out.
   "Started and ended at home" uses your most common start point, worked out in the page each time.
-- Runs start unticked. Each section has a tick box beside its heading. Ticks and sliders are
-  remembered in your browser.
+- Runs start unticked. The filters apply to every tab. Leaving a tab puts the map back to all rides
+  (the route builder keeps its route). The tab, ticks and sliders are remembered in your browser.
+- In the A to B and Route builder tabs, a click on the map or on a ride drops a point.
 
 ### Routes you repeat
 
@@ -111,6 +113,18 @@ The list shows every ride that came within the radius of A and later of B (tick 
 include B-then-A, marked ↩). Click a column to sort, click a row to highlight the ride and its A-to-B
 stretch in orange. A search also narrows the map to the rides it found; Clear brings them all back.
 
+### Route builder
+
+Click the map to drop point 1, then 2, 3 and so on. Each point snaps to the nearest road you have
+ridden (within 300 m; a red point found none), and you can drag it. Each leg takes the fastest way
+between its two points along roads you have ridden, joining pieces of different rides, timed at your
+average moving time on each ~50 m piece. It turns only where one of your rides turned, so it never
+drops off a bridge onto the road below or crosses to the other side of a dual carriageway. Up to two
+other ways are listed when they differ enough and are less than half as slow again; click one to use
+it, hover to see it in orange. The total adds up the ways you picked. Roads count only in the direction you rode them; tick Use roads both ways to drop that
+(the time is the one for the way you rode). The filters choose which rides make up the roads: untick
+mountain biking to plan on the road only.
+
 ## Privacy
 
 Every track starts at your home. Everything the tool downloads or builds lives in your `.route-browser`
@@ -132,8 +146,8 @@ in tools they run for their own use: share this folder, never someone's key.
   `road_biking`, `mountain_biking`, `gravel_cycling`, `cyclocross`, `bmx`, `running`, `trail_running`
   (not indoor, treadmill or virtual). It reads FIT and TCX downloads; GPX not yet.
 - `loops.py` groups routes, records where rides slow down, and finds repeat places. `build_map.py`
-  writes the page; the stretch finder and A-to-B matcher are its JavaScript.
-- `python build_map.py --self-test` checks all three on made-up tracks. It needs `node`, but no network
+  writes the page; the stretch finder, A-to-B matcher and route builder are its JavaScript.
+- `python build_map.py --self-test` checks all of them on made-up tracks. It needs `node`, but no network
   and no key.
 - What changed is in [CHANGELOG.md](CHANGELOG.md), why it is built this way in
   [docs/decisions.md](docs/decisions.md), and what is planned in [NEXT.md](NEXT.md) and
