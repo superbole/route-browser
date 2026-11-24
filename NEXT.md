@@ -4,6 +4,7 @@
 
 1. **Retry failed downloads on every run** — Sonnet · medium · AFK/Auto → [brief](briefs/retry-failed.md)
 2. **Read GPX downloads** — Sonnet · medium · AFK/Auto → [brief](briefs/gpx.md)
+3. **Filter New spots by distance (km)** — Sonnet · medium · AFK/Auto → [brief](briefs/km-filter.md)
 
 ---
 Route browser: your Garmin rides on one local page (repeat routes, repeat places, A to B, route builder).

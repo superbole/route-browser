@@ -22,8 +22,8 @@ Brief: [gpx](briefs/gpx.md)
 One activity downloads as GPX, which fetch.py does not read yet (FIT and TCX it does).
 
 ## B3. Filter New spots by distance (km), not only minutes
-`Sonnet` · effort `medium` · `AFK/Auto` · added `2026-11-24`
-Brief: none yet; write one when queued.
+`Sonnet` · effort `medium` · `AFK/Auto` · added `2026-11-24` · issue `#3` · queued
+Brief: [km-filter](briefs/km-filter.md)
 
 Stretch length is minutes at your usual pace, so for a test at FTP (faster) a "30 min" stretch is
 too short: the Akasia stretch (Loop 61 km E, 20 km, 31 min usual) takes about 26 min at 270 W
