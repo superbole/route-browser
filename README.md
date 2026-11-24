@@ -154,6 +154,8 @@ in tools they run for their own use: share this folder, never someone's key.
   it has not cached, and goes slowly on purpose (Garmin publishes no rate limits). Types: `cycling`,
   `road_biking`, `mountain_biking`, `gravel_cycling`, `cyclocross`, `bmx`, `running`, `trail_running`
   (not indoor, treadmill or virtual). It reads FIT and TCX downloads; GPX not yet.
+- A download that fails is saved in `~/.route-browser/failed.json` and retried at the start of every
+  run, whatever `--since` says; the entry goes once the activity is cached. The `done:` line counts them.
 - `loops.py` groups routes, records where rides slow down, and finds repeat places. `build_map.py`
   writes the page; the stretch finder, A-to-B matcher and route builder are its JavaScript.
 - `python build_map.py --self-test` checks all of them on made-up tracks. It needs `node`, but no network
