@@ -98,12 +98,12 @@ function segStats(r, i, j) {  // time-weighted averages; gaps over 30 s count as
   return {el: r.tt[j] - r.tt[i], mov, m: r.dd[j] - r.dd[i],
           hr: ht ? Math.round(hw / ht) : null, w: pt ? Math.round(pw / pt) : null};
 }
-function stretches(r, x, lvl, share, minS) {  // no-stop runs on route x's medoid r (loops.py writes x.sh)
+function stretches(r, x, lvl, share, minS, maxS = Infinity) {  // no-stop runs on route x's medoid r (loops.py writes x.sh)
   const sh = x.sh[lvl], n = sh.length, out = [];
   const mov = (i, j) => { let s = 0; for (let k = i + 1; k <= j; k++) { const dt = r.tt[k] - r.tt[k - 1]; if (dt <= 30) s += dt; } return s; };
   const push = (i, j) => {
     const s = mov(i, j), a = x.alt[i], b = x.alt[j], m = r.dd[j] - r.dd[i];
-    if (s >= minS) out.push({i, j, s, km: +(r.dd[i] / 1000).toFixed(1), len: +(m / 1000).toFixed(1), long: s >= 1200, at: mov(0, i),
+    if (s >= minS && s <= maxS) out.push({i, j, s, km: +(r.dd[i] / 1000).toFixed(1), len: +(m / 1000).toFixed(1), long: s >= 1200, at: mov(0, i),
                              g: a != null && b != null && m > 0 ? +((b - a) / m * 100).toFixed(1) : null});
   };
   let st = null;
@@ -250,13 +250,14 @@ td.n { max-width:120px; overflow:hidden; text-overflow:ellipsis; }
   <div id="routebox"><div class="mute">Rides grouped by route (same start, same finish, mostly the same roads). Click one to see it alone:
     <span style="color:#2f9e44">green</span> (two shades, so neighbours stand apart) = stretches with no stops at your usual pace;
     <span style="color:#e03131">red</span> = climbs that suit repeats. ★ = 20 min+, long enough for a 20-min rep.</div>
-  <div class="row">A stop is slowing under <input type="range" id="slow" min="50" max="80" step="10" value="70"> <span id="slowv"></span> of usual speed</div>
+  <div id="stopsliders"><div class="row">A stop is slowing under <input type="range" id="slow" min="50" max="80" step="10" value="70"> <span id="slowv"></span> of usual speed</div>
   <div class="row">on at least <input type="range" id="share" min="10" max="60" step="5" value="25"> <span id="sharev"></span> of the rides there</div>
-  <div class="row">Shortest stretch <input type="range" id="minlen" min="4" max="20" step="1" value="8"> <span id="minv"></span></div>
+  <div class="row">Shortest stretch <input type="range" id="minlen" min="4" max="60" step="1" value="8"> <span id="minv"></span>
+    longest <input type="number" id="maxlen" min="1" step="5" placeholder="any" style="width:64px"> min</div>
   <div class="mute">Less strict: speed slider left (only real slowdowns count), rides slider right (only spots where you often slow count).</div>
   <div class="row">Show <select id="rkind"><option value="">loops and one way</option><option value="loop">loops only</option>
     <option value="one">one way only</option></select> moving <input type="number" id="rmin" min="0" step="5" placeholder="any" style="width:64px">
-    to <input type="number" id="rmax" min="0" step="5" placeholder="any" style="width:64px"> min</div>
+    to <input type="number" id="rmax" min="0" step="5" placeholder="any" style="width:64px"> min ride</div></div>
   <table id="routes"></table>
   <div id="rdetail"></div></div>
   <div id="placebox"><div class="mute">Roads where a ride with power had 3+ hard efforts on the same stretch (or 2 of 5 min+),
@@ -265,8 +266,13 @@ td.n { max-width:120px; overflow:hidden; text-overflow:ellipsis; }
   <table id="places"></table>
   <div id="pdetail"></div></div>
   <div id="spotbox"><div class="mute">No-stop stretches and climbs on routes you ride that you have not used for repeats yet,
-    longest first. The sliders on the Routes tab set what counts. "Both ways" = also stop-free heading the other way on one of your routes.
+    longest first. The sliders set what counts. "Both ways" = also stop-free heading the other way on one of your routes.
     Click one to see it in orange.</div>
+  <div id="spotsliders"></div>
+  <div id="sdetail" style="display:none"><div class="row"><button id="spotab">Each ride on this stretch (time, W, bpm)</button></div>
+    <div class="row">Test <input type="number" id="tmin" value="30" min="1" style="width:56px"> min at
+      <input type="number" id="tkmh" value="40" min="1" style="width:56px"> km/h, starting <input type="range" id="toff" min="0" max="100" value="0"></div>
+    <div class="mute" id="tinfo"></div></div>
   <table id="spots"></table></div>
   <div id="abbox"><div class="mute">Click the map to drop A, then B; drag them to adjust. Lists every ride that passed A, then B.</div><div class="row">
     <button id="setA">Move A</button><button id="setB">Move B</button><button id="clear">Clear</button>
@@ -294,7 +300,7 @@ document.getElementById('loading').remove();
 __MATCHER__
 const $ = id => document.getElementById(id);
 // ticks and sliders are remembered in this browser (per viewer, never shared); the page works without it
-const KEEP = ['home', 'either', 'slow', 'share', 'minlen', 'rad', 'rkind', 'rmin', 'rmax', 'beither'];
+const KEEP = ['home', 'either', 'slow', 'share', 'minlen', 'maxlen', 'rad', 'rkind', 'rmin', 'rmax', 'beither', 'tmin', 'tkmh'];
 const kept = (() => { try { return JSON.parse(localStorage.getItem('route-browser-ui') || '{}'); } catch (e) { return {}; } })();
 const BOX = {routes: 'routebox', places: 'placebox', spots: 'spotbox', ab: 'abbox', build: 'buildbox'};
 let tab = BOX[kept.tab] ? kept.tab : 'routes';
@@ -351,10 +357,10 @@ const typeOn = t => kept.types ? kept.types.includes(t) : !t.includes('running')
 $('types').innerHTML = types.map(t => `<label><input type="checkbox" value="${t}"${typeOn(t) ? ' checked' : ''}> ${t.replace(/_/g, ' ')}</label>`).join(' ');
 const dates = RIDES.map(r => r.s.slice(0, 10)).sort();
 $('from').value = dates[0] || ''; $('to').value = dates[dates.length - 1] || '';
-function visible() {
+function visible(all) {  // all: ignore the picked route or place
   const on = new Set([...$('types').querySelectorAll('input:checked')].map(i => i.value));
   const f = $('from').value, t = $('to').value, h = $('home').checked;
-  const only = (selRoute || selPlace) && new Set((selRoute || selPlace).ids);
+  const pick = selRoute || selPlace || selSpot?.x, only = !all && pick && new Set(pick.ids);
   return RIDES.filter(r => on.has(r.y) && (!f || r.s.slice(0, 10) >= f) && (!t || r.s.slice(0, 10) <= t) && (!h || r.homeLoop) &&
                            (!only || only.has(r.id)));
 }
@@ -367,21 +373,22 @@ const min = s => Math.round(s / 60) + ' min';
 const GREENS = ['#2b8a3e', '#94d82d'], RED = '#e03131', HOT = '#f76707';  // alternate so neighbours stand apart
 const pstyle = p => ({color: p.c, weight: 7, opacity: .95});
 function recompute() {
-  const lvl = +$('slow').value, share = +$('share').value, minS = +$('minlen').value * 60;
+  const lvl = +$('slow').value, share = +$('share').value, minS = +$('minlen').value * 60, maxS = $('maxlen').value === '' ? Infinity : $('maxlen').value * 60;
   $('slowv').textContent = lvl + '%'; $('sharev').textContent = share + '%'; $('minv').textContent = $('minlen').value + ' min';
-  ROUTES.forEach(x => { x.stretches = stretches(byId[x.med], x, lvl, share, minS); x.warm = x.stretches.warm; x.home = x.stretches.home; });
+  ROUTES.forEach(x => { x.stretches = stretches(byId[x.med], x, lvl, share, minS, maxS); x.warm = x.stretches.warm; x.home = x.stretches.home; });
 }
 recompute();
-['slow', 'share', 'minlen'].forEach(id => $(id).oninput = () => { recompute(); if (selRoute) pickRoute(selRoute, true); else { renderRoutes(); renderSpots(); } });
+['slow', 'share', 'minlen', 'maxlen'].forEach(id => $(id).oninput = () => { recompute(); if (selRoute) pickRoute(selRoute, true); else { renderRoutes(); renderSpots(); } });
 // routes table: click a heading to sort; the kind and moving-time filters narrow it (e.g. a 1-hour loop: loops, 50 to 70)
 let rSort = 'n', rDir = -1;
 const RCOLS = [['name', 'Route', x => rname(x)], ['n', 'Rides', x => x.ids.length], ['km', 'km', x => x.km], ['mv', 'Moving', x => x.mv],
                ['up', 'Climb', x => x.up], ['start', 'Usually', x => x.start], ['ns', 'Stretches', x => x.stretches.length]];
-['rkind', 'rmin', 'rmax'].forEach(id => $(id).oninput = () => { renderRoutes(); keep(); });
+['rkind', 'rmin', 'rmax'].forEach(id => $(id).oninput = () => { renderRoutes(); renderSpots(); keep(); });
+const routeOk = (x, ids) => { if (!x.ids.some(i => ids.has(i))) return false; const kind = $('rkind').value, lo = $('rmin').value, hi = $('rmax').value;
+  return (!kind || x.loop === (kind === 'loop')) && (lo === '' || x.mv >= lo * 60) && (hi === '' || x.mv <= hi * 60); };
 function renderRoutes() {
   if (tab !== 'routes') return;
-  const kind = $('rkind').value, lo = $('rmin').value, hi = $('rmax').value;
-  const rows = ROUTES.filter(x => (!kind || x.loop === (kind === 'loop')) && (lo === '' || x.mv >= lo * 60) && (hi === '' || x.mv <= hi * 60))
+  const ids = new Set(visible(true).map(r => r.id)), rows = ROUTES.filter(x => routeOk(x, ids))
     .sort((a, b) => { const x = RCOLS.find(c => c[0] === rSort)[2](a), y = RCOLS.find(c => c[0] === rSort)[2](b);
       return (x < y ? -1 : x > y ? 1 : 0) * rDir; });
   $('routes').innerHTML = '<tr>' + RCOLS.map(([k, l]) => `<th data-k="${k}">${l}${k === rSort ? (rDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('') + '</tr>' +
@@ -491,10 +498,11 @@ PLACES.forEach(p => p.sess.forEach(x => { const r = byId[x.id];
 let SPOTS = [], selSpot = null, spotLine = null;
 const brg = (r, d) => (Math.atan2((r.lon[d.j] - r.lon[d.i]) * Math.cos(r.lat[d.i] * Math.PI / 180), r.lat[d.j] - r.lat[d.i]) * 180 / Math.PI + 360) % 360;
 const share = (a, b) => { let n = 0; a.forEach(q => n += b.has(q)); return n / Math.min(a.size, b.size); };
-function findSpots() {
-  const all = [];
-  ROUTES.forEach(x => { const r = byId[x.med];
-    [...x.stretches.map(d => ({x, r, d, kind: 'No stops'})), ...x.climbs.map(d => ({x, r, d, kind: 'Climb'}))].forEach(c => {
+function findSpots() {  // the length filter covers climbs here too: this list is for picking a place to ride
+  const all = [], minS = +$('minlen').value * 60, maxS = $('maxlen').value === '' ? Infinity : $('maxlen').value * 60;
+  const ids = new Set(visible(true).map(r => r.id));
+  ROUTES.filter(x => routeOk(x, ids)).forEach(x => { const r = byId[x.med];
+    [...x.stretches.map(d => ({x, r, d, kind: 'No stops'})), ...x.climbs.filter(d => d.s >= minS && d.s <= maxS).map(d => ({x, r, d, kind: 'Climb'}))].forEach(c => {
       c.cells = new Set(); for (let k = c.d.i; k <= c.d.j; k++) c.cells.add(ck(r.lat[k], r.lon[k]));
       let u = 0; c.cells.forEach(q => u += usedCells.has(q));
       if (u / c.cells.size < .2) { c.b = brg(r, c.d); all.push(c); } }); });
@@ -504,17 +512,32 @@ function findSpots() {
     const o = SPOTS.find(o => o.kind === c.kind && share(c.cells, o.cells) >= .5);
     if (!o) SPOTS.push(c); else if (Math.abs((c.b - o.b + 540) % 360 - 180) > 120) o.both = true;
   }
-  if (selSpot && !SPOTS.includes(selSpot)) pickSpot(null);
+  if (selSpot) {  // finding them again makes new rows: keep the pick if the same stretch is still listed
+    const same = SPOTS.find(o => o.x === selSpot.x && o.kind === selSpot.kind && o.d.i === selSpot.d.i);
+    if (same) selSpot = same; else pickSpot(null);
+  }
 }
 function renderSpots() {
   if (tab !== 'spots') return;
   findSpots();
   $('spots').innerHTML = !SPOTS.length ? '<tr><td class="mute">None at these settings.</td></tr>' :
-    '<tr><th>On</th><th>Starts</th><th>Kind</th><th>Lasts</th><th>km</th><th>Grad.</th><th>Both ways</th></tr>' +
-    SPOTS.slice(0, 30).map((c, k) => `<tr class="res${c === selSpot ? ' sel' : ''}" data-k="${k}"><td>${rname(c.x)}</td><td>km ${c.d.km}</td>` +
+    '<tr><th>On</th><th>Ride</th><th>Starts</th><th>Kind</th><th>Lasts</th><th>km</th><th>Grad.</th><th>Both ways</th></tr>' +
+    SPOTS.slice(0, 30).map((c, k) => `<tr class="res${c === selSpot ? ' sel' : ''}" data-k="${k}"><td>${rname(c.x)}</td><td>${fmtT(c.x.mv)}</td><td>km ${c.d.km}</td>` +
       `<td>${c.kind}</td><td>${min(c.d.s)}</td><td>${c.d.len}</td><td>${c.d.g ?? ''}%</td><td>${c.both ? '✓' : ''}</td></tr>`).join('');
   $('spots').querySelectorAll('tr.res').forEach(tr => tr.onclick = () => pickSpot(SPOTS[+tr.dataset.k]));
 }
+let winLine = null;
+function drawWin() {  // a test of N min at a speed you pick, slid along the picked stretch: where to start, where it ends
+  if (winLine) { winLine.remove(); winLine = null; }
+  if (!selSpot) return;
+  const {r, d} = selSpot, a = r.dd[d.i], b = r.dd[d.j], want = $('tmin').value * 60 * $('tkmh').value / 3.6;
+  const s = a + Math.max(0, b - a - want) * $('toff').value / 100, e = Math.min(s + want, b), ll = [];
+  for (let k = d.i; k <= d.j; k++) if (r.dd[k] >= s && r.dd[k] <= e) ll.push([r.lat[k], r.lon[k]]);
+  if (ll.length > 1) winLine = L.polyline(ll, {color: '#1c7ed6', weight: 6, opacity: 1}).addTo(map);
+  $('tinfo').innerHTML = `Blue: start at km ${(s / 1000).toFixed(1)}, finish at km ${(e / 1000).toFixed(1)} of the ride (${((e - s) / 1000).toFixed(1)} km).` +
+    (want > b - a ? ` <span style="color:#c92a2a">The stretch is ${((want - (b - a)) / 1000).toFixed(1)} km too short.</span>` : '');
+}
+['tmin', 'tkmh', 'toff'].forEach(id => $(id).oninput = drawWin);
 function pickSpot(c) {
   if (spotLine) { spotLine.remove(); spotLine = null; }
   selSpot = c === selSpot ? null : c;
@@ -523,7 +546,12 @@ function pickSpot(c) {
       .bindTooltip(`${selSpot.kind}: ${min(selSpot.d.s)}, ${selSpot.d.len} km, ${selSpot.d.g ?? '?'}%`, {sticky: true}).addTo(map);
     map.fitBounds(spotLine.getBounds(), {maxZoom: 15});
   }
-  renderSpots();
+  update(); if (spotLine) spotLine.bringToFront();
+  $('sdetail').style.display = selSpot ? '' : 'none'; $('toff').value = 0; drawWin();
+  if (selSpot) $('spotab').onclick = () => {  // A to B already lists every ride between two points: put A and B on the stretch's ends
+    const {r, d} = selSpot; setTab('ab');
+    place('A', L.latLng(r.lat[d.i], r.lon[d.i])); place('B', L.latLng(r.lat[d.j], r.lon[d.j])); update();
+  };
 }
 
 // A-to-B
@@ -556,7 +584,7 @@ $('rad').onchange = update;
 $('either').onchange = update;
 ['from', 'to', 'home'].forEach(id => $(id).onchange = refilter);
 $('types').onchange = refilter;
-function refilter() { update(); if (pts.length) calcAll(); else G = null; }  // the builder's roads come from the filtered rides
+function refilter() { update(); renderRoutes(); renderSpots(); if (pts.length) calcAll(); else G = null; }  // the builder's roads come from the filtered rides
 
 // route builder: click points in order; each leg is routed over the road graph of the shown rides (graph() above)
 let pts = [], legs = [], G = null, peek = null;
@@ -604,6 +632,7 @@ function setTab(t) {
   if (tab === 'spots' && selSpot) pickSpot(selSpot);
   if (tab === 'ab' && (A || B)) $('clear').onclick();
   tab = t; keep();
+  if (t === 'spots') $('spotsliders').append($('stopsliders')); else $('routes').before($('stopsliders'));  // one set of sliders and route filters, shown on both tabs
   Object.entries(BOX).forEach(([k, id]) => $(id).style.display = k === t ? '' : 'none');
   $('tabs').querySelectorAll('button').forEach(b => b.className = b.dataset.t === t ? 'on' : '');
   renderRoutes(); renderPlaces(); renderSpots();

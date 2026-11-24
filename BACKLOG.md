@@ -1,5 +1,5 @@
 # BACKLOG — route-browser
-<!-- next-id: 3 -->
+<!-- next-id: 4 -->
 
 Everything worth doing that is NOT in `NEXT.md`'s Queue. Unbounded and unordered —
 the ordering that matters lives in the Queue, which is capped at 5 and refilled from here.
@@ -20,3 +20,13 @@ nightly run only looks back 12 months, so they would never be tried again.
 Brief: [gpx](briefs/gpx.md)
 
 One activity downloads as GPX, which fetch.py does not read yet (FIT and TCX it does).
+
+## B3. Filter New spots by distance (km), not only minutes
+`Sonnet` · effort `medium` · `AFK/Auto` · added `2026-11-24`
+Brief: none yet; write one when queued.
+
+Stretch length is minutes at your usual pace, so for a test at FTP (faster) a "30 min" stretch is
+too short: the Akasia stretch (Loop 61 km E, 20 km, 31 min usual) takes about 26 min at 270 W
+(A to B, 2025-04/05 rides). A min-km box beside Shortest stretch, applied in findSpots() in
+build_map.py on c.d.len, would list what fits directly (about 22 km+ for 30 min at 45 km/h).
+The test window added 2026-11-24 already answers "does it fit" for one spot; this is the search.

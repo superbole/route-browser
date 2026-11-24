@@ -70,7 +70,7 @@ Unregister-ScheduledTask -TaskName "Route browser refresh" -Confirm:$false
 - The map opens on the area within 30 km of home, so a holiday ride, or a watch left recording across a
   flight, does not zoom it out.
   "Started and ended at home" uses your most common start point, worked out in the page each time.
-- Runs start unticked. The filters apply to every tab. Leaving a tab puts the map back to all rides
+- Runs start unticked. The filters apply to every tab; a route shows when any of its rides passes them. Leaving a tab puts the map back to all rides
   (the route builder keeps its route). The tab, ticks and sliders are remembered in your browser.
 - In the A to B and Route builder tabs, a click on the map or on a ride drops a point.
 
@@ -83,8 +83,9 @@ most typical ride:
 - green = stretches with no stops at your usual pace (two shades, so neighbours stand apart; ★ = 20
   min+, long enough for a 20-min rep). A spot counts as a stop when enough of the rides that passed it
   slowed there, or paused, and were not climbing. Three sliders set how strict that is: the speed
-  (default under 70% of usual), the share of rides (default 1 in 4, so a robot that is red 1 time in 4
-  breaks a stretch and one coffee stop does not), and the shortest stretch shown (default 8 min).
+  (default under 70% of usual), the share of rides (default 25%, so a robot that is red 1 time in 4
+  breaks a stretch and one coffee stop does not), and the shortest stretch shown (default 8 min, up
+  to 60), with an optional longest.
 - red = climbs of 25 m+ at 3%+ that take 1 to 15 min.
 - warm-up to the first stretch, and last stretch to the finish, in minutes.
 
@@ -103,8 +104,16 @@ way, teal the other. Rides without power are not searched.
 ### Possible new spots
 
 The no-stop stretches and climbs on your routes that no repeat place covers, longest first, using the
-route sliders. The same road on several routes is listed once; "Both ways" means it is also stop-free
+same sliders and route filters as Routes you repeat, which show on both tabs; here the length limits
+apply to climbs too. The Ride column is the whole route's moving time. The same road on several routes is listed once; "Both ways" means it is also stop-free
 heading the other way on one of your routes, so back-and-forth reps should work there.
+
+Click a spot to show only its route's rides, with the spot in orange. Under the sliders:
+
+- Each ride on this stretch opens A to B with A and B on its ends: every ride's time, W and bpm there.
+- Test N min at a speed you set: a blue window you slide along the stretch, with the km of the ride
+  to start and finish at, and a warning when the stretch is too short. Use the speed you would hold
+  (A to B shows what you held there before).
 
 ### A to B
 
