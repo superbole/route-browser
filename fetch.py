@@ -8,6 +8,9 @@ file with an empty track, so they are not re-downloaded either.
     python fetch.py               # last 12 months
     python fetch.py --since 2023-01-01
 
+A failed download is recorded in ~/.route-browser/failed.json and retried on every run, whatever
+--since says, until it caches.
+
 The cache sits in the home folder, outside every checkout, so a cleaned-up worktree cannot take it
 with it. It holds your home in every track: never commit or upload it.
 """
@@ -28,6 +31,9 @@ from garmin_personal import Garmin  # same folder; the script dir is on sys.path
 
 CACHE = Path.home() / ".route-browser" / "cache"  # same line in build_map.py
 STATUS = CACHE.parent / "fetch_status.json"       # the last fetch's outcome, read by build_map.py
+FAILED = CACHE.parent / "failed.json"             # {activityId: summary} of downloads that failed; retried every run
+SUMMARY = ("activityId", "activityName", "startTimeLocal", "distance", "movingDuration", "duration",
+           "elevationGain", "averageHR", "avgPower")
 OUTDOOR = {"cycling", "road_biking", "mountain_biking", "gravel_cycling", "cyclocross", "bmx",
            "running", "trail_running"}  # not treadmill, indoor or virtual
 SEMI = 180 / 2**31
@@ -109,7 +115,14 @@ def main():
         time.sleep(PAUSE_S)
     rides = [a for a in acts if a["activityType"]["typeKey"] in OUTDOOR]
     todo = [a for a in rides if not (CACHE / f"{a['activityId']}.json").exists()]
-    print(f"{len(acts)} activities since {args.since}, {len(rides)} outdoor rides, {len(todo)} new")
+    failed_log = json.loads(FAILED.read_text()) if FAILED.exists() else {}
+    seen = {str(a["activityId"]) for a in todo}
+    # failures older than --since are never listed above, so retry them from their saved summary
+    retry = [a for k, a in failed_log.items() if k not in seen and not (CACHE / f"{k}.json").exists()]
+    todo += retry
+    retried = sum(str(a["activityId"]) in failed_log for a in todo)  # earlier failures, in or out of --since
+    print(f"{len(acts)} activities since {args.since}, {len(rides)} outdoor rides, {len(todo) - retried} new, "
+          f"{retried} retried from earlier failures")
 
     no_gps = failed = 0
     for i, a in enumerate(todo, 1):
@@ -126,7 +139,10 @@ def main():
                 pts = parse_fit(zf.read(fit)) if fit else parse_tcx(zf.read(tcx))
         except Exception as e:  # one bad file must not stop the pull; it is retried next run
             failed += 1
+            failed_log[str(aid)] = {**{k: a.get(k) for k in SUMMARY}, "activityType": {"typeKey": a["activityType"]["typeKey"]}}
+            FAILED.write_text(json.dumps(failed_log))
             print(f"  {aid}: skipped ({type(e).__name__}: {e})")
+            time.sleep(PAUSE_S)
             continue
         no_gps += not pts
         meta = {k: a.get(k) for k in ("activityId", "activityName", "startTimeLocal", "distance",
@@ -137,11 +153,13 @@ def main():
         cols = list(zip(*pts)) if pts else [[]] * 7
         meta["track"] = dict(zip(("lat", "lon", "t", "d", "alt", "hr", "pw"), map(list, cols)))
         (CACHE / f"{aid}.json").write_text(json.dumps(meta, separators=(",", ":")))
+        if failed_log.pop(str(aid), None) is not None:
+            FAILED.write_text(json.dumps(failed_log))
         print(f"  [{i}/{len(todo)}] {a['startTimeLocal'][:10]} {meta['activityName'][:40]}: {len(pts)} pts")
         time.sleep(PAUSE_S)
 
-    print(f"done: {len(todo) - failed} cached ({no_gps} without GPS), {failed} failed, "
-          f"{len(list(CACHE.glob('*.json')))} in cache")
+    print(f"done: {len(todo) - failed} cached ({no_gps} without GPS), {failed} failed, {retried} retried, "
+          f"{len(failed_log)} awaiting retry, {len(list(CACHE.glob('*.json')))} in cache")
 
 
 def run():
